@@ -101,7 +101,6 @@ random_word = { version = "0.4.3", features = ["en"] }
 roaring = "0.11.4"
 tokio = { version = "1.23", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "test-util"] }
 uuid = { version = "1.7.0", features = ["v4"] }
-walkdir = "2"
 aws-sdk-dynamodb = { version = "1.55.0" }
 aws-sdk-s3 = { version = "1.55.0" }
 aws-sdk-kms = { version = "1.48.0" }

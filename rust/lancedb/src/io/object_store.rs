@@ -194,18 +194,9 @@ impl WrappingObjectStore for MirroringObjectStoreWrapper {
 mod test {
     use super::*;
 
-    use futures::TryStreamExt;
-    use lance::{dataset::WriteParams, io::ObjectStoreParams};
-    use lance_testing::datagen::{BatchGenerator, IncrementingInt32, RandomVector};
     use object_store::{local::LocalFileSystem, memory::InMemory};
     use std::time::Duration;
     use tempfile;
-
-    use crate::{
-        connect,
-        query::{ExecutableQuery, QueryBase},
-        table::WriteOptions,
-    };
 
     #[derive(Debug)]
     struct EvictBeforeCopyStore {
@@ -338,100 +329,5 @@ mod test {
             secondary_inner.head(&finalized).await,
             Err(Error::NotFound { .. })
         ));
-    }
-
-    // This test is ignored because lance 3.0 introduced LocalWriter optimization
-    // that bypasses the object store wrapper for local writes. The mirroring feature
-    // still works for remote/cloud storage, but can't be tested with local storage.
-    // See lance commit c878af433 "perf: create local writer for efficient local writes"
-    #[ignore]
-    #[tokio::test]
-    async fn test_e2e() {
-        let dir1 = tempfile::tempdir().unwrap().keep().canonicalize().unwrap();
-        let dir2 = tempfile::tempdir().unwrap().keep().canonicalize().unwrap();
-
-        let secondary_store = LocalFileSystem::new_with_prefix(dir2.to_str().unwrap()).unwrap();
-        let object_store_wrapper = Arc::new(MirroringObjectStoreWrapper {
-            secondary: Arc::new(secondary_store),
-        });
-
-        let db = connect(dir1.to_str().unwrap()).execute().await.unwrap();
-
-        let mut param = WriteParams::default();
-        let store_params = ObjectStoreParams {
-            object_store_wrapper: Some(object_store_wrapper),
-            ..Default::default()
-        };
-        param.store_params = Some(store_params);
-
-        let mut datagen = BatchGenerator::new();
-        datagen = datagen.col(Box::<IncrementingInt32>::default());
-        datagen = datagen.col(Box::new(RandomVector::default().named("vector".into())));
-
-        let data: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(datagen.batch(100));
-        let res = db
-            .create_table("test", data)
-            .write_options(WriteOptions {
-                lance_write_params: Some(param),
-            })
-            .execute()
-            .await;
-
-        // leave this here for easy debugging
-        let t = res.unwrap();
-
-        assert_eq!(t.count_rows(None).await.unwrap(), 100);
-
-        let q = t
-            .query()
-            .limit(10)
-            .nearest_to(&[0.1, 0.1, 0.1, 0.1])
-            .unwrap()
-            .execute()
-            .await
-            .unwrap();
-
-        let bateches = q.try_collect::<Vec<_>>().await.unwrap();
-        assert_eq!(bateches.len(), 1);
-        assert_eq!(bateches[0].num_rows(), 10);
-
-        use walkdir::WalkDir;
-
-        let primary_location = dir1.join("test.lance").canonicalize().unwrap();
-        let secondary_location = dir2.join(primary_location.strip_prefix("/").unwrap());
-
-        // Skip lance internal directories (_versions, _transactions) and manifest files
-        let should_skip = |path: &std::path::Path| -> bool {
-            let path_str = path.to_str().unwrap();
-            path_str.contains("_latest.manifest")
-                || path_str.contains("_versions")
-                || path_str.contains("_transactions")
-        };
-
-        let primary_files: Vec<_> = WalkDir::new(&primary_location)
-            .into_iter()
-            .filter_entry(|e| !should_skip(e.path()))
-            .filter_map(|e| e.ok())
-            .map(|e| {
-                e.path()
-                    .strip_prefix(&primary_location)
-                    .unwrap()
-                    .to_path_buf()
-            })
-            .collect();
-
-        let secondary_files: Vec<_> = WalkDir::new(&secondary_location)
-            .into_iter()
-            .filter_entry(|e| !should_skip(e.path()))
-            .filter_map(|e| e.ok())
-            .map(|e| {
-                e.path()
-                    .strip_prefix(&secondary_location)
-                    .unwrap()
-                    .to_path_buf()
-            })
-            .collect();
-
-        assert_eq!(primary_files, secondary_files, "File lists should match");
     }
 }
